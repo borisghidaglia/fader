@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   following       INTEGER NOT NULL DEFAULT 1,
   follow_order    INTEGER,          -- 0 = the account you followed most recently
   ratio           REAL,             -- NULL = use the default ratio
+  reply_ratio     REAL,             -- replies' own fader; NULL = replies go with ratio
   newest_seen_id  TEXT,             -- newest tweet seen on the account's own timeline
   covered_since   INTEGER,          -- its timeline is read without gaps back to here (0 = all of it)
   next_sync_at    INTEGER NOT NULL DEFAULT 0,
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS tweets (
   views           INTEGER,
   metrics_at      INTEGER NOT NULL, -- when the metrics above were observed
   score           REAL,             -- projected lifetime engagement
-  top             REAL              -- rank within the author's recent output: 0 = best, 1 = worst
+  top             REAL,             -- rank within the author's recent output: 0 = best, 1 = worst
+  kind_top        REAL              -- the same, among only their posts or only their replies
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS tweets_by_time ON tweets (created_at DESC, id DESC);
@@ -79,9 +81,14 @@ export function getDb(): DatabaseSync {
 
 /** Brings databases created by earlier versions up to SCHEMA. */
 function migrate(db: DatabaseSync) {
-  const columns = db.prepare("SELECT name FROM pragma_table_info('accounts')").all()
-  if (!columns.some((c) => c.name === "covered_since")) {
-    db.exec("ALTER TABLE accounts ADD COLUMN covered_since INTEGER")
+  const has = (table: string, column: string) =>
+    db.prepare(`SELECT 1 FROM pragma_table_info('${table}') WHERE name = ?`).get(column) !== undefined
+  if (!has("accounts", "covered_since")) db.exec("ALTER TABLE accounts ADD COLUMN covered_since INTEGER")
+  if (!has("accounts", "reply_ratio")) db.exec("ALTER TABLE accounts ADD COLUMN reply_ratio REAL")
+  if (!has("tweets", "kind_top")) {
+    db.exec("ALTER TABLE tweets ADD COLUMN kind_top REAL")
+    // Their overall rank stands in until the next re-rank (the worker runs one when it starts).
+    db.exec("UPDATE tweets SET kind_top = top")
   }
 }
 

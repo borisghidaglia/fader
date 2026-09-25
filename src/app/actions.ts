@@ -4,11 +4,13 @@ import {
   feedPage,
   requestAccountSync,
   requestSync,
-  setAccountRatio,
+  setAccountFaders,
+  setAccountSplit,
   setDefaultRatio,
   toFeedFilter,
   type FeedFilter,
 } from "@/lib/store"
+import type { Faders } from "@/lib/faders"
 import type { FeedCursor, FeedItem } from "@/lib/types"
 
 // Server actions are reachable by anything that can reach the app, so check inputs.
@@ -25,10 +27,19 @@ function assertId(id: unknown): asserts id is string {
   if (typeof id !== "string" || !/^\d+$/.test(id)) throw new Error("Invalid account id")
 }
 
-export async function saveAccountRatio(accountId: string, ratio: number | null) {
+/** Saves the faders given; the other keeps its saved setting. */
+export async function saveAccountFaders(accountId: string, { ratio, replyRatio }: Partial<Faders>) {
   assertId(accountId)
-  if (ratio !== null) assertRatio(ratio)
-  setAccountRatio(accountId, ratio)
+  if (ratio != null) assertRatio(ratio)
+  if (replyRatio != null) assertRatio(replyRatio)
+  setAccountFaders(accountId, { ratio, replyRatio })
+}
+
+/** Splits an account's fader in two or joins its two, returning where they end up. */
+export async function splitAccountFaders(accountId: string, split: boolean): Promise<Faders> {
+  assertId(accountId)
+  if (typeof split !== "boolean") throw new Error("Split must be true or false")
+  return setAccountSplit(accountId, split)
 }
 
 export async function saveDefaultRatio(ratio: number) {

@@ -30,7 +30,7 @@ export function Fader({
   curve: Bar[]
   /** Accessible name, e.g. "Show from @jack". */
   label: string
-  size?: "default" | "lg"
+  size?: "sm" | "default" | "lg"
   className?: string
 }) {
   return (
@@ -51,7 +51,7 @@ export function Fader({
           "relative flex w-full touch-none items-center select-none",
           // On touch screens only the cap is grabbable, so a list of faders still scrolls.
           "pointer-coarse:pointer-events-none",
-          size === "lg" ? "h-14" : "h-9",
+          { sm: "h-7", default: "h-9", lg: "h-14" }[size],
         )}
       >
         <Slider.Track className="relative h-full w-full">
@@ -65,7 +65,7 @@ export function Fader({
               "outline-none focus-visible:ring-signal data-dragging:scale-x-125 data-dragging:cursor-grabbing",
               // A finger-sized grab area around the narrow cap.
               "pointer-events-auto touch-none before:absolute before:inset-y-0 before:-inset-x-4",
-              size === "lg" ? "h-14 w-2" : "h-9 w-1.5",
+              { sm: "h-7 w-1.5", default: "h-9 w-1.5", lg: "h-14 w-2" }[size],
             )}
           />
         </Slider.Track>

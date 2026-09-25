@@ -1,5 +1,6 @@
-import { engagementCurve } from "@/lib/curve"
+import { engagementCurve, type Bar } from "@/lib/curve"
 import { getDb, transaction } from "@/lib/db"
+import { refit, shownPerDay, type Faders } from "@/lib/faders"
 import { RANK_WINDOW_MS, rankAuthorTweets } from "@/lib/ranking"
 import type {
   Account,
@@ -146,18 +147,27 @@ export function countFollowedAccounts(): number {
 /**
  * An account's recent tweets, over the last week or the part of it we've read
  * without gaps: a first sync of a prolific account covers only its last day or so.
- * Needs :weekAgo; read with perDay().
+ * Needs :weekAgo; read with pace().
  */
 const ACTIVITY_COLUMNS = `
   MAX(:weekAgo, COALESCE(a.covered_since, 0)) AS activity_since,
   (
     SELECT COUNT(*) FROM tweets t
     WHERE t.author_id = a.id AND t.created_at >= MAX(:weekAgo, COALESCE(a.covered_since, 0))
-  ) AS activity_count`
+  ) AS activity_count,
+  (
+    SELECT COUNT(*) FROM tweets t
+    WHERE t.author_id = a.id AND t.created_at >= MAX(:weekAgo, COALESCE(a.covered_since, 0)) AND t.kind = 'reply'
+  ) AS activity_replies`
 
-function perDay(row: Row, now = Date.now()): number {
+/** Tweets a day, and how many of them are replies. */
+function pace(row: Row, now = Date.now()): { perDay: number; repliesPerDay: number } {
   const days = Math.max(1, (now - Number(row.activity_since)) / DAY)
-  return Number(row.activity_count) / days
+  return { perDay: Number(row.activity_count) / days, repliesPerDay: Number(row.activity_replies) / days }
+}
+
+function faders(row: Row): Faders {
+  return { ratio: row.ratio as number | null, replyRatio: row.reply_ratio as number | null }
 }
 
 export function listAccounts(): Account[] {
@@ -169,8 +179,8 @@ export function listAccounts(): Account[] {
       ORDER BY a.follow_order IS NULL, a.follow_order
     `)
     .all({ weekAgo: Date.now() - 7 * DAY }) as Row[]
-  const curves = rankedBestFirst()
-  return rows.map((row) => toAccount(row, curves.get(row.id as string)))
+  const ranked = rankedBestFirst()
+  return rows.map((row) => toAccount(row, ranked.get(row.id as string)))
 }
 
 /** An account, by how many of its posts reach your feed each day. */
@@ -181,7 +191,7 @@ export function feedMix(limit: number): { perDay: number; loudest: FeedSource[] 
   const now = Date.now()
   const rows = getDb()
     .prepare(`
-      SELECT a.id, a.handle, a.name, a.avatar_url, a.verified, a.ratio, ${ACTIVITY_COLUMNS}
+      SELECT a.id, a.handle, a.name, a.avatar_url, a.verified, a.ratio, a.reply_ratio, ${ACTIVITY_COLUMNS}
       FROM accounts a WHERE a.following = 1
     `)
     .all({ weekAgo: now - 7 * DAY }) as Row[]
@@ -192,7 +202,7 @@ export function feedMix(limit: number): { perDay: number; loudest: FeedSource[] 
     name: row.name as string,
     avatarUrl: row.avatar_url as string | null,
     verified: row.verified === 1,
-    perDay: perDay(row, now) * ((row.ratio as number | null) ?? defaultRatio),
+    perDay: shownPerDay(pace(row, now), faders(row), defaultRatio),
   }))
   return {
     perDay: sources.reduce((sum, source) => sum + source.perDay, 0),
@@ -213,27 +223,37 @@ export function getAccountByHandle(handle: string): Account | null {
   return row ? toAccount(row, rankedBestFirst(row.id as string).get(row.id as string)) : null
 }
 
-/** Each account's ranked tweets within the rank window, best first. */
-function rankedBestFirst(accountId?: string): Map<string, { score: number; top: number }[]> {
+type Ranked = { score: number; top: number }[]
+
+/**
+ * Each account's ranked tweets within the rank window, best first: all together,
+ * and posts and replies apart (ranked by their `kind_top`, for split faders).
+ */
+function rankedBestFirst(accountId?: string): Map<string, { all: Ranked; posts: Ranked; replies: Ranked }> {
   const rows = getDb()
     .prepare(`
-      SELECT t.author_id, t.score, t.top FROM tweets t JOIN accounts a ON a.id = t.author_id
+      SELECT t.author_id, t.kind, t.score, t.top, t.kind_top FROM tweets t JOIN accounts a ON a.id = t.author_id
       WHERE a.following = 1 AND t.created_at >= :windowStart AND t.score IS NOT NULL
         AND (:accountId IS NULL OR t.author_id = :accountId)
       ORDER BY t.author_id, t.top
     `)
     .all({ windowStart: Date.now() - RANK_WINDOW_MS, accountId: accountId ?? null }) as Row[]
-  const ranked = new Map<string, { score: number; top: number }[]>()
+  const ranked = new Map<string, { all: Ranked; posts: Ranked; replies: Ranked }>()
   for (const row of rows) {
     const id = row.author_id as string
-    let list = ranked.get(id)
-    if (!list) ranked.set(id, (list = []))
-    list.push({ score: row.score as number, top: row.top as number })
+    let lists = ranked.get(id)
+    if (!lists) ranked.set(id, (lists = { all: [], posts: [], replies: [] }))
+    const score = row.score as number
+    lists.all.push({ score, top: row.top as number })
+    // Best first within the kind too: the same order by score, so by kind_top.
+    lists[row.kind === "reply" ? "replies" : "posts"].push({ score, top: row.kind_top as number })
   }
   return ranked
 }
 
-function toAccount(row: Row, ranked: { score: number; top: number }[] = []): Account {
+const NO_CURVES = { all: [] as Bar[], posts: [] as Bar[], replies: [] as Bar[] }
+
+function toAccount(row: Row, ranked?: { all: Ranked; posts: Ranked; replies: Ranked }): Account {
   return {
     id: row.id as string,
     handle: row.handle as string,
@@ -244,20 +264,63 @@ function toAccount(row: Row, ranked: { score: number; top: number }[] = []): Acc
     verified: row.verified === 1,
     protected: row.protected === 1,
     followOrder: row.follow_order as number | null,
-    ratio: row.ratio as number | null,
+    ...faders(row),
     lastSyncedAt: row.last_synced_at as number | null,
     lastError: row.last_error as string | null,
-    perDay: perDay(row),
-    curve: engagementCurve(ranked),
+    ...pace(row),
+    curves: ranked
+      ? {
+          all: engagementCurve(ranked.all),
+          posts: engagementCurve(ranked.posts),
+          replies: engagementCurve(ranked.replies),
+        }
+      : NO_CURVES,
   }
 }
 
-/** `null` resets the account to the default ratio. */
-export function setAccountRatio(accountId: string, ratio: number | null): void {
+/**
+ * Sets the faders given and leaves the other alone, so a page that's out of date can't
+ * undo it. `{ ratio: null, replyRatio: null }` puts the account back on the default.
+ */
+export function setAccountFaders(accountId: string, { ratio, replyRatio }: Partial<Faders>): void {
+  const clamped = (value: number | null | undefined) => (value == null ? null : clampRatio(value))
   getDb()
-    .prepare("UPDATE accounts SET ratio = ? WHERE id = ?")
-    .run(ratio === null ? null : clampRatio(ratio), accountId)
+    .prepare(`
+      UPDATE accounts SET
+        ratio = IIF(:setRatio, :ratio, ratio),
+        reply_ratio = IIF(:setReplyRatio, :replyRatio, reply_ratio)
+      WHERE id = :accountId
+    `)
+    .run({
+      setRatio: Number(ratio !== undefined),
+      ratio: clamped(ratio),
+      setReplyRatio: Number(replyRatio !== undefined),
+      replyRatio: clamped(replyRatio),
+      accountId,
+    })
 }
+
+/** Gives an account's replies a fader of their own, or folds it back in (see `refit`). */
+export function setAccountSplit(accountId: string, split: boolean): Faders {
+  return transaction(() => {
+    const db = getDb()
+    const row = db.prepare("SELECT ratio, reply_ratio FROM accounts WHERE id = ?").get(accountId) as Row | undefined
+    if (!row) throw new Error(`No account ${accountId}`)
+    const tweets = db
+      .prepare(`
+        SELECT kind, top, kind_top FROM tweets
+        WHERE author_id = ? AND created_at >= ? AND score IS NOT NULL
+      `)
+      .all(accountId, Date.now() - RANK_WINDOW_MS)
+      .map((t) => ({ kind: t.kind as TweetKind, top: t.top as number, kindTop: t.kind_top as number }))
+    const next = refit(faders(row), split, tweets, getDefaultRatio())
+    setAccountFaders(accountId, next)
+    return next
+  })
+}
+
+/** Some of what the account says gets through. Needs :defaultRatio. */
+const NOT_MUTED = `MAX(COALESCE(ratio, :defaultRatio), COALESCE(reply_ratio, ratio, :defaultRatio)) > 0`
 
 export type SyncTarget = { id: string; handle: string; newestSeenId: string | null }
 
@@ -266,8 +329,7 @@ export function dueAccounts(now: number, limit: number): SyncTarget[] {
   const rows = getDb()
     .prepare(`
       SELECT id, handle, newest_seen_id FROM accounts
-      WHERE following = 1 AND next_sync_at <= :now
-        AND COALESCE(ratio, :defaultRatio) > 0
+      WHERE following = 1 AND next_sync_at <= :now AND ${NOT_MUTED}
       ORDER BY next_sync_at, follow_order
       LIMIT :limit
     `)
@@ -284,7 +346,7 @@ export function nextAccountDueAt(): number | null {
   const row = getDb()
     .prepare(`
       SELECT MIN(next_sync_at) AS at FROM accounts
-      WHERE following = 1 AND COALESCE(ratio, :defaultRatio) > 0
+      WHERE following = 1 AND ${NOT_MUTED}
     `)
     .get({ defaultRatio: getDefaultRatio() }) as Row
   return (row.at as number | null) ?? null
@@ -295,7 +357,7 @@ export function syncProgress(): { synced: number; total: number } {
   const row = getDb()
     .prepare(`
       SELECT COUNT(last_synced_at) AS synced, COUNT(*) AS total FROM accounts
-      WHERE following = 1 AND COALESCE(ratio, :defaultRatio) > 0
+      WHERE following = 1 AND ${NOT_MUTED}
     `)
     .get({ defaultRatio: getDefaultRatio() }) as Row
   return { synced: Number(row.synced), total: Number(row.total) }
@@ -329,7 +391,7 @@ export function activityPerDay(accountId: string): number {
   const row = getDb()
     .prepare(`SELECT ${ACTIVITY_COLUMNS} FROM accounts a WHERE a.id = :accountId`)
     .get({ accountId, weekAgo: Date.now() - 7 * DAY }) as Row | undefined
-  return row ? perDay(row) : 0
+  return row ? pace(row).perDay : 0
 }
 
 // ─── Tweets ─────────────────────────────────────────────────────────────────
@@ -397,10 +459,13 @@ function rerankAuthors(authorIds: Set<string>): void {
     SELECT id, kind, created_at, metrics_at, likes, reposts, replies, quotes, bookmarks, views
     FROM tweets WHERE author_id = ? AND created_at >= ?
   `)
-  const update = db.prepare("UPDATE tweets SET score = ?, top = ? WHERE id = ?")
+  const update = db.prepare("UPDATE tweets SET score = ?, top = ?, kind_top = ? WHERE id = ?")
   // Tweets older than the window keep their last rank; ones that never had one
   // (an old pinned tweet, say) only show when you want everything from the author.
-  const fillOld = db.prepare("UPDATE tweets SET top = 1 WHERE author_id = ? AND top IS NULL")
+  const fillOld = db.prepare(`
+    UPDATE tweets SET top = COALESCE(top, 1), kind_top = COALESCE(kind_top, 1)
+    WHERE author_id = ? AND (top IS NULL OR kind_top IS NULL)
+  `)
   const windowStart = Date.now() - RANK_WINDOW_MS
 
   for (const authorId of authorIds) {
@@ -421,7 +486,7 @@ function rerankAuthors(authorIds: Set<string>): void {
         },
       })),
     )
-    for (const [id, { score, top }] of ranks) update.run(score, top, id)
+    for (const [id, { score, top, kindTop }] of ranks) update.run(score, top, kindTop, id)
     fillOld.run(authorId)
   }
 }
@@ -434,16 +499,23 @@ export function toFeedFilter(value: unknown): FeedFilter {
 }
 
 const FEED_SELECT = `
-  SELECT t.id, t.kind, t.created_at, t.reply_to_handle, t.content, t.top,
+  SELECT t.id, t.kind, t.created_at, t.reply_to_handle, t.content, t.top, t.kind_top,
          t.likes, t.reposts, t.replies, t.quotes, t.bookmarks, t.views,
          a.id AS author_id, a.handle, a.name, a.avatar_url, a.verified
   FROM tweets t JOIN accounts a ON a.id = t.author_id
 `
 
-/** What's in your feed: what each account's fader lets through, of the chosen kind. Needs :defaultRatio and :filter. */
+/**
+ * What's in your feed: what each account's faders let through (see getsThrough), of
+ * the chosen kind. Needs :defaultRatio and :filter.
+ */
 const IN_FEED = `
   a.following = 1
-  AND t.top <= COALESCE(a.ratio, :defaultRatio)
+  AND CASE
+    WHEN a.reply_ratio IS NULL THEN t.top <= COALESCE(a.ratio, :defaultRatio)
+    WHEN t.kind = 'reply' THEN t.kind_top <= a.reply_ratio
+    ELSE t.kind_top <= COALESCE(a.ratio, :defaultRatio)
+  END
   AND (:filter = 'all' OR (:filter = 'replies') = (t.kind = 'reply'))
 `
 
@@ -512,6 +584,7 @@ function toFeedItem(row: Row): FeedItem {
     replyToHandle: row.reply_to_handle as string | null,
     content: JSON.parse(row.content as string) as TweetContent,
     top: row.top as number,
+    kindTop: row.kind_top as number,
     metrics: {
       likes: row.likes as number,
       reposts: row.reposts as number,

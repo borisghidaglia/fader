@@ -1,6 +1,6 @@
 # Fader
 
-Your X "Following" feed, with a fader for each account you follow. At 1 you see everything they post and reply. At 0.1 you only see their best 10%. At 0 they're muted.
+Your X "Following" feed, with a fader for each account you follow. At 1 you see everything they post and reply. At 0.1 you only see their best 10%. At 0 they're muted. When you want every post from someone but only their best replies (or the other way around), give their replies a fader of their own.
 
 It runs on your machine and reads X with your own browser session, not the paid API.
 
@@ -40,6 +40,8 @@ likes + 2·reposts + 2·quotes + replies + bookmarks
 Young posts haven't collected their engagement yet, so they're scored on a projection. Early numbers count for less, and the projection falls back on that account's typical post (posts and replies are compared separately). A fader at 0.25 lets through the posts that rank in the account's top 25%.
 
 The bars on each fader are that account's recent posts, best first. The lit ones are what gets through.
+
+On an account's page, **Separate fader for replies** splits its fader in two. Posts are then ranked against its other posts and replies against its other replies, so a fader at 0.1 on replies lets through its best 10% of replies, however they compare with its posts. Switching it off goes back to one fader.
 
 ## Commands
 

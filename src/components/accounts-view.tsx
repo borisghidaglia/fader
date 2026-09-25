@@ -5,7 +5,7 @@ import Link from "next/link"
 import { useDeferredValue, useState, useTransition } from "react"
 import { toast } from "sonner"
 
-import { saveAccountRatio, saveDefaultRatio } from "@/app/actions"
+import { saveAccountFaders, saveDefaultRatio } from "@/app/actions"
 import { Desk, type Channel } from "@/components/desk"
 import { Fader } from "@/components/fader"
 import { TabButton, Tabs } from "@/components/page"
@@ -13,6 +13,7 @@ import { AuthorAvatar, VerifiedBadge } from "@/components/tweet/tweet-card"
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "@/components/ui/empty"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
+import { isMuted, isTuned, levels, shownPerDay, type Faders } from "@/lib/faders"
 import { describeRatio, formatPerDay, formatRate } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { Account } from "@/lib/types"
@@ -36,9 +37,11 @@ const sorts: Record<Sort, string> = {
 
 /** Every account you follow, each with its own fader, plus the default they fall back to. */
 export function AccountsView({ accounts, defaultRatio: savedDefault }: { accounts: Account[]; defaultRatio: number }) {
-  const [ratios, setRatios] = useState<Record<string, number | null>>(() =>
-    Object.fromEntries(accounts.map((a) => [a.id, a.ratio])),
+  const [settings, setSettings] = useState<Record<string, Faders>>(() =>
+    Object.fromEntries(accounts.map((a) => [a.id, { ratio: a.ratio, replyRatio: a.replyRatio }])),
   )
+  // Accounts the worker finds after the page loaded start from what's saved.
+  const fadersOf = (a: Account): Faders => settings[a.id] ?? { ratio: a.ratio, replyRatio: a.replyRatio }
   const [defaultRatio, setDefaultRatio] = useState(savedDefault)
   const [query, setQuery] = useState("")
   const [sort, setSort] = useState<Sort>("active")
@@ -56,16 +59,20 @@ export function AccountsView({ accounts, defaultRatio: savedDefault }: { account
     .sort(compareBy(sort))
   const visible = matching.slice(0, limit)
 
-  let shownPerDay = 0
+  let shownTotal = 0
   let totalPerDay = 0
   let unread = 0
   const channels: Channel[] = []
   for (const a of accounts) {
-    const ratio = ratios[a.id] ?? defaultRatio
+    const shown = shownPerDay(a, fadersOf(a), defaultRatio)
     totalPerDay += a.perDay
-    shownPerDay += a.perDay * ratio
+    shownTotal += shown
     if (a.lastSyncedAt === null) unread++
-    channels.push({ perDay: a.perDay, ratio, read: a.lastSyncedAt !== null })
+    channels.push({
+      perDay: a.perDay,
+      ratio: a.perDay > 0 ? shown / a.perDay : levels(fadersOf(a), defaultRatio).posts,
+      read: a.lastSyncedAt !== null,
+    })
   }
 
   function chooseShow(kind: Show) {
@@ -75,7 +82,7 @@ export function AccountsView({ accounts, defaultRatio: savedDefault }: { account
         : new Set(
             accounts
               .filter((a) =>
-                kind === "tuned" ? ratios[a.id] !== null : (ratios[a.id] ?? defaultRatio) === 0,
+                kind === "tuned" ? isTuned(fadersOf(a)) : isMuted(fadersOf(a), defaultRatio),
               )
               .map((a) => a.id),
           )
@@ -83,23 +90,25 @@ export function AccountsView({ accounts, defaultRatio: savedDefault }: { account
     setLimit(PAGE)
   }
 
-  function changeRatio(accountId: string, ratio: number | null) {
-    setRatios((current) => ({ ...current, [accountId]: ratio }))
+  function changeFaders(accountId: string, faders: Faders) {
+    setSettings((current) => ({ ...current, [accountId]: faders }))
   }
 
-  function commitRatio(account: Account, ratio: number | null) {
+  /** Saves only the faders that moved, so a stale tab can't undo the other. */
+  function commitFaders(account: Account, changes: Partial<Faders>) {
     startSaving(async () => {
       try {
-        await saveAccountRatio(account.id, ratio)
+        await saveAccountFaders(account.id, changes)
       } catch {
-        toast.error(`Couldn't save the fader for @${account.handle}`)
+        toast.error(`Couldn't save the faders for @${account.handle}`)
       }
     })
   }
 
-  function resetRatio(account: Account) {
-    changeRatio(account.id, null)
-    commitRatio(account, null)
+  function resetFaders(account: Account) {
+    const faders = { ratio: null, replyRatio: null }
+    changeFaders(account.id, faders)
+    commitFaders(account, faders)
   }
 
   function commitDefault(ratio: number) {
@@ -116,7 +125,7 @@ export function AccountsView({ accounts, defaultRatio: savedDefault }: { account
     <>
       <section aria-label="Your feed's volume" className="border-b px-4 pt-3 pb-4">
         <p className="flex flex-wrap items-baseline gap-x-2">
-          <span className="readout text-[31px] leading-9 font-extrabold tracking-tight">≈{formatRate(shownPerDay)}</span>
+          <span className="readout text-[31px] leading-9 font-extrabold tracking-tight">≈{formatRate(shownTotal)}</span>
           <span className="text-muted-foreground">posts a day in your feed</span>
         </p>
         <Desk channels={channels} className="mt-3" />
@@ -198,11 +207,11 @@ export function AccountsView({ accounts, defaultRatio: savedDefault }: { account
             <AccountRow
               key={account.id}
               account={account}
-              ratio={ratios[account.id]}
+              faders={fadersOf(account)}
               defaultRatio={defaultRatio}
-              onChange={changeRatio}
-              onCommit={commitRatio}
-              onReset={resetRatio}
+              onChange={changeFaders}
+              onCommit={commitFaders}
+              onReset={resetFaders}
             />
           ))}
         </ul>
@@ -245,21 +254,22 @@ export function AccountsView({ accounts, defaultRatio: savedDefault }: { account
 
 function AccountRow({
   account,
-  ratio,
+  faders,
   defaultRatio,
   onChange,
   onCommit,
   onReset,
 }: {
   account: Account
-  ratio: number | null
+  faders: Faders
   defaultRatio: number
-  onChange: (accountId: string, ratio: number) => void
-  onCommit: (account: Account, ratio: number) => void
+  onChange: (accountId: string, faders: Faders) => void
+  onCommit: (account: Account, changes: Partial<Faders>) => void
   onReset: (account: Account) => void
 }) {
-  const value = ratio ?? defaultRatio
-  const tuned = ratio !== null
+  const { split, posts, replies } = levels(faders, defaultRatio)
+  const tuned = isTuned(faders)
+  const read = account.lastSyncedAt !== null
 
   return (
     <li
@@ -281,7 +291,7 @@ function AccountRow({
           <span className="truncate">@{account.handle}</span>
           <span aria-hidden>·</span>
           <span className="readout shrink-0">
-            {account.lastSyncedAt === null ? "not read yet" : formatPerDay(account.perDay)}
+            {read ? formatPerDay(account.perDay) : "not read yet"}
           </span>
           {account.lastError && (
             <span title={`Last sync failed: ${account.lastError}`} className="shrink-0">
@@ -292,16 +302,49 @@ function AccountRow({
         </p>
       </div>
 
-      <Fader
-        value={value}
-        onValueChange={(next) => onChange(account.id, next)}
-        onValueCommitted={(next) => onCommit(account, next)}
-        curve={account.curve}
-        label={`Show from @${account.handle}`}
-        className="col-[2/-1] row-start-2 sm:col-[3] sm:row-start-1"
-      />
+      {split ? (
+        // Posts and replies on faders of their own, set on the account's page.
+        <div className="col-[2/-1] row-start-2 grid grid-cols-[3.25rem_minmax(0,1fr)] items-center gap-x-2 gap-y-1 sm:col-[3] sm:row-start-1">
+          <span className="text-[13px] text-muted-foreground">Posts</span>
+          <Fader
+            value={posts}
+            onValueChange={(ratio) => onChange(account.id, { ...faders, ratio })}
+            onValueCommitted={(ratio) => onCommit(account, { ratio })}
+            curve={account.curves.posts}
+            label={`Show posts from @${account.handle}`}
+            size="sm"
+          />
+          <span className="text-[13px] text-muted-foreground">Replies</span>
+          <Fader
+            value={replies}
+            onValueChange={(replyRatio) => onChange(account.id, { ...faders, replyRatio })}
+            onValueCommitted={(replyRatio) => onCommit(account, { replyRatio })}
+            curve={account.curves.replies}
+            label={`Show replies from @${account.handle}`}
+            size="sm"
+          />
+        </div>
+      ) : (
+        <Fader
+          value={posts}
+          onValueChange={(ratio) => onChange(account.id, { ...faders, ratio })}
+          onValueCommitted={(ratio) => onCommit(account, { ratio })}
+          curve={account.curves.all}
+          label={`Show from @${account.handle}`}
+          className="col-[2/-1] row-start-2 sm:col-[3] sm:row-start-1"
+        />
+      )}
 
-      <Readout value={value} perDay={account.lastSyncedAt === null ? null : account.perDay * value} tuned={tuned} />
+      {split ? (
+        <div className="readout grid text-right leading-5 font-bold sm:gap-y-1 sm:leading-7">
+          <p className={cn(faders.ratio === null ? "text-muted-foreground" : posts > 0 && "text-signal")}>
+            {describeRatio(posts)}
+          </p>
+          <p className={cn(replies > 0 && "text-signal")}>{describeRatio(replies)}</p>
+        </div>
+      ) : (
+        <Readout value={posts} perDay={read ? shownPerDay(account, faders, defaultRatio) : null} tuned={tuned} />
+      )}
 
       {tuned ? (
         <Tooltip>

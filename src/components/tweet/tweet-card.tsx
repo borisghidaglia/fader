@@ -36,8 +36,11 @@ export function TweetCard({
   className,
 }: {
   item: FeedItem
-  /** Always show the tweet's rank, not only when it's a standout. */
-  showRank?: boolean
+  /**
+   * Always show the tweet's rank, not only when it's a standout: among everything the
+   * author said, or among only their posts or only their replies (what split faders go by).
+   */
+  showRank?: false | "overall" | "kind"
   /** Link to the author's fader, to turn them up or down from the feed. */
   linkFader?: boolean
   className?: string
@@ -55,7 +58,11 @@ export function TweetCard({
         <ProfileAvatar author={author} />
         <div className="min-w-0 flex-1">
           <TweetHeader author={author} createdAt={item.createdAt} url={url}>
-            {(showRank || item.top <= STANDOUT_TOP) && <RankChip top={item.top} handle={author.handle} />}
+            {showRank === "kind" ? (
+              <RankChip top={item.kindTop} handle={author.handle} among={item.kind === "reply" ? "replies" : "posts"} />
+            ) : (
+              (showRank || item.top <= STANDOUT_TOP) && <RankChip top={item.top} handle={author.handle} />
+            )}
           </TweetHeader>
 
           {item.kind === "reply" && !parent && item.replyToHandle && (
@@ -145,11 +152,11 @@ function TweetHeader({
   )
 }
 
-function RankChip({ top, handle }: { top: number; handle: string }) {
+function RankChip({ top, handle, among }: { top: number; handle: string; among?: "posts" | "replies" }) {
   return (
     <span
       className="readout ml-auto shrink-0 rounded-full bg-signal/10 px-2 text-[13px] leading-5 font-bold text-signal"
-      title={`Ranks in the ${describeRank(top)} of @${handle}'s last 30 days`}
+      title={`Ranks in the ${describeRank(top)} of @${handle}'s ${among ? `${among} from the ` : ""}last 30 days`}
     >
       {describeRank(top)}
     </span>

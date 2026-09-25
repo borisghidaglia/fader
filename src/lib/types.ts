@@ -53,6 +53,8 @@ export type FeedItem = {
   metrics: Metrics
   /** Rank within the author's recent output: 0 = their best, 1 = their worst. */
   top: number
+  /** The same, among only their posts or only their replies. */
+  kindTop: number
   author: {
     id: string
     handle: string
@@ -74,14 +76,18 @@ export type Account = {
   verified: boolean
   protected: boolean
   followOrder: number | null
-  /** The account's own setting, or null when it uses the default. */
+  /** The account's own fader, or null when it uses the default. See Faders. */
   ratio: number | null
+  /** Its replies' own fader, or null when one fader covers posts and replies. */
+  replyRatio: number | null
   lastSyncedAt: number | null
   lastError: string | null
   /** Posts + replies per day over the last week (or as much of it as has been read). */
   perDay: number
-  /** Their recent tweets ranked best first, as fader track bars. */
-  curve: Bar[]
+  /** The replies among them. */
+  repliesPerDay: number
+  /** Their recent tweets ranked best first, as fader track bars: all together, then posts and replies apart. */
+  curves: { all: Bar[]; posts: Bar[]; replies: Bar[] }
 }
 
 export type SyncStatus = {

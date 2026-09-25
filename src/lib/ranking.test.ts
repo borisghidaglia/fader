@@ -92,4 +92,15 @@ describe("rankAuthorTweets", () => {
     // Starts at a typical reply's level (~5 likes), not a typical post's (~500).
     expect(ranks.get("fresh-reply")?.top).toBeGreaterThan(0.5)
   })
+
+  it("also ranks posts against posts and replies against replies, for split faders", () => {
+    const posts = Array.from({ length: 10 }, (_, i) => tweet(`p${i}`, 100 + i))
+    const replies = Array.from({ length: 10 }, (_, i) => tweet(`r${i}`, i, { kind: "reply" }))
+    const ranks = rankAuthorTweets([...posts, ...replies])
+    // Their best reply trails every post, but it's the best of their replies.
+    expect(ranks.get("r9")!.top).toBeGreaterThan(0.5)
+    expect(ranks.get("r9")!.kindTop).toBe(0.05)
+    expect(ranks.get("p9")!.kindTop).toBe(0.05)
+    expect(ranks.get("p0")!.kindTop).toBe(0.95)
+  })
 })

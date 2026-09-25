@@ -56,17 +56,23 @@ export type Rank = {
   score: number
   /**
    * Position in the author's ranking as a fraction: 0 is their best, 1 their worst.
-   * A tweet is shown when `top <= ratio`, so ratio 0.1 shows the author's best ~10%
-   * and ratio 1 shows everything.
+   * Under one fader a tweet is shown when `top <= ratio`, so ratio 0.1 shows the
+   * author's best ~10% and ratio 1 shows everything.
    */
   top: number
+  /**
+   * The same, among only the author's posts (quotes included) or only their replies.
+   * An account whose replies have their own fader is filtered on this instead.
+   */
+  kindTop: number
 }
 
-/** Ranks one author's tweets against each other. */
+/** Ranks one author's tweets against each other, and against the others of their kind. */
 export function rankAuthorTweets(tweets: RankableTweet[]): Map<string, Rank> {
   const typical = typicalEngagement(tweets)
   const scored = tweets.map((t) => ({
     id: t.id,
+    reply: t.kind === "reply",
     score: projectedEngagement(
       engagement(t.metrics),
       maturity(t.metricsAt - t.createdAt),
@@ -75,18 +81,28 @@ export function rankAuthorTweets(tweets: RankableTweet[]): Map<string, Rank> {
   }))
   scored.sort((a, b) => b.score - a.score)
 
-  const ranks = new Map<string, Rank>()
-  const n = scored.length
+  const top = positions(scored)
+  const kindTop = new Map([
+    ...positions(scored.filter((t) => !t.reply)),
+    ...positions(scored.filter((t) => t.reply)),
+  ])
+  return new Map(scored.map((t) => [t.id, { score: t.score, top: top.get(t.id)!, kindTop: kindTop.get(t.id)! }]))
+}
+
+/** Each tweet's position in a list sorted best first, as a fraction: 0 is the best, 1 the worst. */
+function positions(sorted: { id: string; score: number }[]): Map<string, number> {
+  const tops = new Map<string, number>()
+  const n = sorted.length
   for (let start = 0; start < n; ) {
     // Tied tweets share the average of their positions, so a slider setting
     // shows all or none of a tie rather than an arbitrary subset.
     let end = start
-    while (end + 1 < n && scored[end + 1].score === scored[start].score) end++
+    while (end + 1 < n && sorted[end + 1].score === sorted[start].score) end++
     const top = ((start + end) / 2 + 0.5) / n
-    for (let i = start; i <= end; i++) ranks.set(scored[i].id, { score: scored[i].score, top })
+    for (let i = start; i <= end; i++) tops.set(sorted[i].id, top)
     start = end + 1
   }
-  return ranks
+  return tops
 }
 
 /**

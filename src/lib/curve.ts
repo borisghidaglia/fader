@@ -5,7 +5,10 @@ const MAX_BARS = 40
 export type Bar = {
   /** 0–1, on a square-root scale so a single viral post doesn't flatten everything else. */
   height: number
-  /** Rank of the tweet it stands for: lit when `top <= ratio`, the feed's own rule. */
+  /**
+   * Rank of the tweet it stands for, among the tweets on this track (`top`, or `kind_top`
+   * on a posts or replies fader): lit when it's at or under the fader, the feed's own rule.
+   */
   top: number
 }
 

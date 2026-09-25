@@ -118,17 +118,17 @@ describe("sync", () => {
     const all = store.feedPage({ limit: 100 })
     expect(all).toHaveLength(ownTweets.length)
 
-    store.setAccountRatio(NASA, 0.25)
+    store.setAccountFaders(NASA, { ratio: 0.25, replyRatio: null })
     const top = store.feedPage({ limit: 100 })
     expect(top).toHaveLength(Math.round(ownTweets.length * 0.25))
     const bestLikes = Math.max(...ownTweets.map((t) => t.likeCount ?? 0))
     expect(top.some((t) => t.metrics.likes === bestLikes)).toBe(true)
 
-    store.setAccountRatio(NASA, 0)
+    store.setAccountFaders(NASA, { ratio: 0, replyRatio: null })
     expect(store.feedPage({ limit: 100 })).toHaveLength(0)
     expect(store.dueAccounts(Infinity, 10).map((t) => t.id)).not.toContain(NASA)
 
-    store.setAccountRatio(NASA, null)
+    store.setAccountFaders(NASA, { ratio: null, replyRatio: null })
     store.setDefaultRatio(0.5)
     expect(store.feedPage({ limit: 100 })).toHaveLength(Math.round(ownTweets.length * 0.5))
     store.setDefaultRatio(1)
@@ -245,6 +245,48 @@ describe("sync", () => {
     expect(store.dueAccounts(Date.now(), 10).map((t) => t.id)).not.toContain("2")
     const [after] = store.dueAccounts(Infinity, 10).filter((t) => t.id === "2")
     expect(after.newestSeenId).toBe(newest.toString())
+  })
+
+  it("gives replies a fader of their own", () => {
+    const fromNasa = () => store.feedPage({ limit: 500 }).filter((t) => t.author.id === NASA)
+    const everything = fromNasa()
+    const replies = everything.filter((t) => t.kind === "reply")
+    expect(replies.length).toBeGreaterThan(0)
+
+    store.setAccountFaders(NASA, { ratio: 1, replyRatio: 0 })
+    expect(fromNasa()).toHaveLength(everything.length - replies.length)
+    expect(fromNasa().some((t) => t.kind === "reply")).toBe(false)
+
+    store.setAccountFaders(NASA, { ratio: 0, replyRatio: 1 })
+    expect(fromNasa().map((t) => t.id)).toEqual(replies.map((t) => t.id))
+    // Its replies still get through, so the account is still read.
+    expect(store.dueAccounts(Infinity, 10).map((t) => t.id)).toContain(NASA)
+
+    store.setAccountFaders(NASA, { ratio: 0, replyRatio: 0 })
+    expect(store.dueAccounts(Infinity, 10).map((t) => t.id)).not.toContain(NASA)
+    store.setAccountFaders(NASA, { ratio: null, replyRatio: null })
+  })
+
+  it("saves one fader without touching the other", () => {
+    const nasa = () => store.listAccounts().find((a) => a.id === NASA)!
+    store.setAccountFaders(NASA, { ratio: 0.2, replyRatio: 0.7 })
+    store.setAccountFaders(NASA, { ratio: 0.5 })
+    expect(nasa()).toMatchObject({ ratio: 0.5, replyRatio: 0.7 })
+    store.setAccountFaders(NASA, { replyRatio: 0.1 })
+    expect(nasa()).toMatchObject({ ratio: 0.5, replyRatio: 0.1 })
+    store.setAccountFaders(NASA, { ratio: null, replyRatio: null })
+  })
+
+  it("keeps the feed as it was when replies get their own fader", () => {
+    const fromNasa = () => store.feedPage({ limit: 500 }).filter((t) => t.author.id === NASA).map((t) => t.id)
+    store.setAccountFaders(NASA, { ratio: 0.4 })
+    const before = fromNasa()
+    expect(before.length).toBeGreaterThan(0)
+    expect(store.setAccountSplit(NASA, true).replyRatio).not.toBeNull()
+    expect(fromNasa()).toEqual(before)
+    expect(store.setAccountSplit(NASA, false).replyRatio).toBeNull()
+    expect(fromNasa()).toHaveLength(before.length)
+    store.setAccountFaders(NASA, { ratio: null, replyRatio: null })
   })
 
   it("marks accounts you unfollowed", () => {
