@@ -48,3 +48,4 @@ next-env.d.ts
 # showcase video (its own Remotion project)
 /video/node_modules
 /video/out
+/video/public/music

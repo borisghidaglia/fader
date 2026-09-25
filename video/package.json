@@ -6,6 +6,7 @@
   "scripts": {
     "studio": "remotion studio",
     "render": "remotion render Fader out/fader.mp4",
+    "sfx": "node scripts/sfx.mts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

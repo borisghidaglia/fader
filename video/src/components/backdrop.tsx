@@ -36,7 +36,8 @@ export function Backdrop() {
   )
 }
 
-function Cross({ x, y }: { x: number; y: number }) {
+/** A small cross, where guide lines meet. */
+export function Cross({ x, y }: { x: number; y: number }) {
   const size = 22
   const line = { position: "absolute", background: "rgba(255,255,255,0.45)" } as const
   return (

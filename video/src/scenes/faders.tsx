@@ -1,16 +1,23 @@
 import { AbsoluteFill, interpolateColors, random, useCurrentFrame } from "remotion"
 
+import { founder } from "../cast"
 import { Avatar } from "../components/avatar"
 import { Cursor } from "../components/cursor"
 import { Reveal, useEnter } from "../components/reveal"
+import { detents, type Cue } from "../sound"
 import { label, title } from "../styles"
 import { color, describeRatio, easeInOut, formatRate, frame as box, monthOfPosts, sans, tween } from "../theme"
 
 // A prolific founder's month: fewer posts than replies, and replies get far less engagement.
 const PER_DAY = { posts: 14, replies: 24 }
+/**
+ * Bars on each of the split tracks. A month of either is well over 40, and Fader draws
+ * at most 40 bars a track, so both are full and line up.
+ */
+const BARS = 40
 const TWEETS = (() => {
-  const posts = monthOfPosts("founder-post", 18).map((own) => ({ reply: false, own, all: own }))
-  const replies = monthOfPosts("founder-reply", 26).map((own) => ({ reply: true, own, all: own * 0.42 }))
+  const posts = monthOfPosts("founder-post", BARS).map((own) => ({ reply: false, own, all: own }))
+  const replies = monthOfPosts("founder-reply", BARS).map((own) => ({ reply: true, own, all: own * 0.42 }))
   const list = [...posts, ...replies]
     .map((t, i) => ({ ...t, when: random(`founder-when-${i}`) }))
     .sort((a, b) => a.when - b.when)
@@ -26,6 +33,11 @@ const TWEETS = (() => {
 const N = TWEETS.length
 const N_POSTS = TWEETS.filter((t) => !t.reply).length
 const N_REPLIES = N - N_POSTS
+
+// How many frames apart the first and last bars start to grow, sort and split, whatever their number.
+const GROW_SPREAD = 44
+const SORT_SPREAD = 22
+const SPLIT_SPREAD = 20
 
 // Layout, from the content frame's top left.
 const X = 80
@@ -47,6 +59,32 @@ const captions = [
   { text: "Slide to keep only their best", from: 224, to: 330 },
 ]
 
+/** Where the faders are: one slid down, then split, then posts up and replies down. */
+function levels(frame: number) {
+  const single = 1 - 0.7 * tween(frame, 252, 300, 0, 1, easeInOut)
+  return {
+    single,
+    posts: single + 0.7 * tween(frame, 486, 536, 0, 1, easeInOut),
+    replies: single - 0.2 * tween(frame, 566, 612, 0, 1, easeInOut),
+  }
+}
+
+export const sounds: Cue[] = [
+  { at: 26, sound: "pop", volume: 0.22 },
+  { at: 138, sound: "shuffle", volume: 0.25 },
+  { at: 214, sound: "click", volume: 0.3 },
+  // A detent every other bar: one a bar would be a buzz across this many.
+  ...detents((frame) => levels(frame).single, N / 2, 252, 300),
+  { at: 318, sound: "pop", volume: 0.2 },
+  { at: 367, sound: "click", volume: 0.3 },
+  { at: 372, sound: "toggle", volume: 0.35 },
+  { at: 390, sound: "shuffle", volume: 0.2 },
+  { at: 480, sound: "click", volume: 0.3 },
+  ...detents((frame) => levels(frame).posts, N_POSTS, 486, 536),
+  { at: 561, sound: "click", volume: 0.3 },
+  ...detents((frame) => levels(frame).replies, N_REPLIES, 566, 612),
+]
+
 /** One fader for an account, then two: the switch splits it into posts and replies. */
 export function Faders() {
   const frame = useCurrentFrame()
@@ -55,11 +93,9 @@ export function Faders() {
 
   const cap = tween(frame, 212, 236)
   const lit = tween(frame, 214, 244)
-  const single = 1 - 0.7 * tween(frame, 252, 300, 0, 1, easeInOut)
+  const { single, posts, replies } = levels(frame)
   const toggle = tween(frame, 372, 384, 0, 1, easeInOut)
   const split = tween(frame, 390, 450, 0, 1, easeInOut)
-  const posts = single + 0.7 * tween(frame, 486, 536, 0, 1, easeInOut)
-  const replies = single - 0.2 * tween(frame, 566, 612, 0, 1, easeInOut)
   const kindLabels = tween(frame, 428, 458)
   const shownPerDay = split > 0 ? PER_DAY.posts * posts + PER_DAY.replies * replies : (PER_DAY.posts + PER_DAY.replies) * single
 
@@ -88,9 +124,9 @@ export function Faders() {
         </div>
 
         <div style={{ ...header, position: "absolute", left: X, top: 186, width: W, display: "flex", alignItems: "center", gap: 20 }}>
-          <Avatar name="Prolific founder" hue={24} size={64} />
+          <Avatar name={founder.name} hue={founder.hue} size={64} />
           <div style={{ flex: 1, fontFamily: sans, lineHeight: 1.25 }}>
-            <div style={{ fontSize: 30, fontWeight: 700, color: color.xText, letterSpacing: "-0.02em" }}>Prolific founder</div>
+            <div style={{ fontSize: 30, fontWeight: 700, color: color.xText, letterSpacing: "-0.02em" }}>{founder.name}</div>
             <div style={{ fontSize: 22, color: color.xMuted }}>{PER_DAY.posts + PER_DAY.replies} posts a day</div>
           </div>
           {/* One fader: its setting, and what it lets through. Two: what they let through together. */}
@@ -111,9 +147,12 @@ export function Faders() {
         </div>
 
         {TWEETS.map((t, i) => {
-          const grow = tween(frame, 40 + i, 62 + i)
-          const sort = tween(frame, 138 + t.rankAll * 0.5, 190 + t.rankAll * 0.5, 0, 1, easeInOut)
-          const move = tween(frame, 390 + t.rankKind * 0.8, 440 + t.rankKind * 0.8, 0, 1, easeInOut)
+          const growAt = 40 + (i / N) * GROW_SPREAD
+          const sortAt = 138 + (t.rankAll / N) * SORT_SPREAD
+          const moveAt = 390 + (t.rankKind / BARS) * SPLIT_SPREAD
+          const grow = tween(frame, growAt, growAt + 22)
+          const sort = tween(frame, sortAt, sortAt + 52, 0, 1, easeInOut)
+          const move = tween(frame, moveAt, moveAt + 50, 0, 1, easeInOut)
 
           const one = slotOf(N)
           const own = slotOf(t.reply ? N_REPLIES : N_POSTS)

@@ -1,6 +1,7 @@
 import { AbsoluteFill, random, useCurrentFrame } from "remotion"
 
 import { Reveal } from "../components/reveal"
+import { detents, type Cue } from "../sound"
 import { at, label, title } from "../styles"
 import { color, tween } from "../theme"
 
@@ -25,13 +26,19 @@ const desk = (() => {
 })()
 const busiest = desk.channels[0].perDay
 
+/** How far the faders have let the feed through: 0, then all of it. */
+const litAt = (frame: number) => tween(frame, 104, 164)
+
+// About one detent per 5 posts on the counter.
+export const sounds: Cue[] = detents(litAt, 17, 104, 164, 0.18)
+
 /**
  * Every account you follow as a channel, busiest first. A channel's height is how
  * much the account posts; its blue part is what its faders let through.
  */
 export function MyFeed() {
   const frame = useCurrentFrame()
-  const lit = tween(frame, 104, 164)
+  const lit = litAt(frame)
   const shown = Math.round(desk.shownPerDay * lit)
   const slot = WIDTH / desk.channels.length
 

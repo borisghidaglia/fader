@@ -1,9 +1,11 @@
 import { Fragment } from "react"
 import { AbsoluteFill, interpolateColors, useCurrentFrame } from "remotion"
 
+import { expert, founder, friend, hotTakes, news } from "../cast"
 import { Avatar } from "../components/avatar"
 import { Reveal, useEnter } from "../components/reveal"
 import { Track } from "../components/track"
+import { detents, type Cue } from "../sound"
 import { at, title } from "../styles"
 import { color, describeRatio, easeInOut, formatRate, monthOfPosts, ranked, sans, tween } from "../theme"
 
@@ -20,12 +22,30 @@ type Account = {
 }
 
 const accounts: Account[] = [
-  { name: "Close friend", hue: 330, perDay: 3, target: 1 },
-  { name: "Quiet expert", hue: 150, perDay: 1, target: 1 },
-  { name: "Prolific founder", hue: 24, perDay: 38, target: 1, replies: 0.1 },
-  { name: "Breaking news", hue: 200, perDay: 120, target: 0.05 },
-  { name: "Hot takes", hue: 270, perDay: 25, target: 0 },
+  { ...friend, perDay: 3, target: 1 },
+  { ...expert, perDay: 1, target: 1 },
+  { ...founder, perDay: 38, target: 1, replies: 0.1 },
+  { ...news, perDay: 120, target: 0.05 },
+  { ...hotTakes, perDay: 25, target: 0 },
 ]
+
+/** Bars on every track, the split ones too, so their bars line up. */
+const BARS = 26
+
+/** Rows slide from the default to their own setting one after another, each over SLIDE frames. */
+const slideAt = (index: number) => 86 + index * 24
+const SLIDE = 44
+/** Where a fader sliding to `to` is, on row `index`. */
+const slid = (index: number, to: number) => (frame: number) =>
+  DEFAULT + (to - DEFAULT) * tween(frame, slideAt(index), slideAt(index) + SLIDE, 0, 1, easeInOut)
+
+export const sounds: Cue[] = accounts.flatMap(({ target, replies }, i) => {
+  const ticks = (to: number) => detents(slid(i, to), BARS, slideAt(i), slideAt(i) + SLIDE, 0.26)
+  return [
+    { at: 22 + i * 6, sound: `tick-${i % 4}`, volume: 0.24 },
+    ...(replies === undefined ? ticks(target) : [...ticks(target), ...ticks(replies)]),
+  ]
+})
 
 const ROW_WIDTH = 1360
 const TRACK_WIDTH = 640
@@ -62,13 +82,11 @@ export function EveryAccount() {
 function Row({ name, hue, perDay, target, replies, index }: Account & { index: number }) {
   const frame = useCurrentFrame()
   const enter = useEnter(22 + index * 6, 30, 16)
-  const heights = ranked(monthOfPosts(name, 26))
+  const heights = ranked(monthOfPosts(name, BARS))
 
-  const start = 86 + index * 24
-  const move = tween(frame, start, start + 44, 0, 1, easeInOut)
-  const value = DEFAULT + (target - DEFAULT) * move
+  const value = slid(index, target)(frame)
   // Grey while it follows the default, blue once it's set, as in Fader.
-  const tuned = tween(frame, start, start + 12)
+  const tuned = tween(frame, slideAt(index), slideAt(index) + 12)
   const readout = (to: number) => interpolateColors(tuned, [0, 1], [color.xMuted, to > 0 ? color.blue : color.xMuted])
 
   return (
@@ -107,8 +125,8 @@ function Row({ name, hue, perDay, target, replies, index }: Account & { index: n
         <>
           <div style={{ display: "grid", gridTemplateColumns: `${KIND_LABEL}px ${TRACK_WIDTH - KIND_LABEL}px`, alignItems: "center", rowGap: 12 }}>
             {[
-              { kind: "Posts", heights: ranked(monthOfPosts(`${name}-posts`, 18)), value },
-              { kind: "Replies", heights: ranked(monthOfPosts(`${name}-replies`, 26)), value: DEFAULT + (replies - DEFAULT) * move },
+              { kind: "Posts", heights: ranked(monthOfPosts(`${name}-posts`, BARS)), value },
+              { kind: "Replies", heights: ranked(monthOfPosts(`${name}-replies`, BARS)), value: slid(index, replies)(frame) },
             ].map((fader) => (
               <Fragment key={fader.kind}>
                 <span style={{ fontSize: 20, color: color.xMuted }}>{fader.kind}</span>
@@ -130,7 +148,7 @@ function Row({ name, hue, perDay, target, replies, index }: Account & { index: n
             }}
           >
             <div style={{ color: readout(target) }}>{describeRatio(value)}</div>
-            <div style={{ color: readout(replies) }}>{describeRatio(DEFAULT + (replies - DEFAULT) * move)}</div>
+            <div style={{ color: readout(replies) }}>{describeRatio(slid(index, replies)(frame))}</div>
           </div>
         </>
       )}
