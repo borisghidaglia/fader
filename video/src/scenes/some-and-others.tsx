@@ -1,0 +1,64 @@
+import { AbsoluteFill, useCurrentFrame } from "remotion"
+
+import { Reveal } from "../components/reveal"
+import { Track } from "../components/track"
+import { at, label, title } from "../styles"
+import { describeRatio, easeInOut, monthOfPosts, ranked, tween } from "../theme"
+
+const rows = [
+  { text: "Some people, I want every post and every reply.", seed: "friend", from: 0, to: 1, start: 0 },
+  { text: "Others, only their best.", seed: "prolific", from: 1, to: 0.15, start: 70 },
+]
+
+/** The two cases from the original ask. */
+export function SomeAndOthers() {
+  return (
+    <AbsoluteFill>
+      {rows.map((row, i) => (
+        <Row key={row.seed} {...row} top={150 + i * 270} />
+      ))}
+    </AbsoluteFill>
+  )
+}
+
+function Row({
+  text,
+  seed,
+  from,
+  to,
+  start,
+  top,
+}: {
+  text: string
+  seed: string
+  from: number
+  to: number
+  start: number
+  top: number
+}) {
+  const frame = useCurrentFrame()
+  const heights = ranked(monthOfPosts(seed, 24))
+  const cap = tween(frame, start + 28, start + 44)
+  const value = from + (to - from) * tween(frame, start + 44, start + 92, 0, 1, easeInOut)
+
+  return (
+    <div style={{ ...at(80, top), display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <div style={{ ...title, fontSize: 58, maxWidth: 780 }}>
+        <Reveal text={text} start={start} />
+      </div>
+      <div style={{ opacity: tween(frame, start + 10, start + 30) }}>
+        <Track
+          heights={heights}
+          value={value}
+          width={460}
+          height={100}
+          grow={(i) => tween(frame, start + 10 + i * 0.8, start + 32 + i * 0.8)}
+          cap={cap}
+          lit={cap}
+          capWidth={10}
+        />
+        <p style={{ ...label, margin: "18px 0 0", opacity: cap }}>{describeRatio(value)}</p>
+      </div>
+    </div>
+  )
+}
